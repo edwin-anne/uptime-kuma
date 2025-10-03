@@ -156,6 +156,7 @@ async function sendInfo(socket, hideVersion = false) {
 
     const oidcEnabled = await setting("oidcEnabled");
     const oidcButtonLabel = await setting("oidcButtonLabel");
+    const oidcTokenEndpointAuthMethod = await setting("oidcTokenEndpointAuthMethod");
 
     socket.emit("info", {
         version,
@@ -168,6 +169,7 @@ async function sendInfo(socket, hideVersion = false) {
         oidc: {
             enabled: !!oidcEnabled,
             buttonLabel: oidcButtonLabel || null,
+            tokenEndpointAuthMethod: oidcTokenEndpointAuthMethod || "auto",
         },
     });
 }

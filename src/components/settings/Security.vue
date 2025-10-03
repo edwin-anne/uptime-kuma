@@ -127,6 +127,18 @@
                     </div>
 
                     <div class="mb-3">
+                        <label class="form-label" for="oidc-discovery">{{ $t("OIDC Discovery URL") }}</label>
+                        <input
+                            id="oidc-discovery"
+                            v-model="settings.oidcDiscoveryURL"
+                            class="form-control"
+                            type="url"
+                            autocomplete="off"
+                        />
+                        <div class="form-text">{{ $t("oidcDiscoveryURLHint") }}</div>
+                    </div>
+
+                    <div class="mb-3">
                         <label class="form-label" for="oidc-scope">{{ $t("OIDC Scope") }}</label>
                         <input
                             id="oidc-scope"
@@ -179,6 +191,17 @@
                             autocomplete="off"
                             :placeholder="$t('Sign in with OIDC')"
                         />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="oidc-token-method">{{ $t("OIDC Token Endpoint Auth Method") }}</label>
+                        <select id="oidc-token-method" v-model="settings.oidcTokenEndpointAuthMethod" class="form-select">
+                            <option value="auto">{{ $t("oidcTokenAuthAuto") }}</option>
+                            <option value="client_secret_basic">{{ $t("oidcTokenAuthClientSecretBasic") }}</option>
+                            <option value="client_secret_post">{{ $t("oidcTokenAuthClientSecretPost") }}</option>
+                            <option value="none">{{ $t("oidcTokenAuthNone") }}</option>
+                        </select>
+                        <div class="form-text">{{ $t("oidcTokenEndpointAuthHint") }}</div>
                     </div>
 
                     <div>

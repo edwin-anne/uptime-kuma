@@ -219,6 +219,19 @@ export default {
                     this.settings.oidcButtonLabel = "";
                 }
 
+                if (this.settings.oidcDiscoveryURL === undefined) {
+                    this.settings.oidcDiscoveryURL = "";
+                }
+
+                if (this.settings.oidcTokenEndpointAuthMethod === undefined) {
+                    this.settings.oidcTokenEndpointAuthMethod = "auto";
+                } else {
+                    const allowedAuthMethods = [ "auto", "client_secret_basic", "client_secret_post", "none" ];
+                    if (!allowedAuthMethods.includes(this.settings.oidcTokenEndpointAuthMethod)) {
+                        this.settings.oidcTokenEndpointAuthMethod = "auto";
+                    }
+                }
+
                 this.settingsLoaded = true;
             });
         },
@@ -283,6 +296,13 @@ export default {
                     return {
                         success: false,
                         msg: this.$t("oidcScopeMissingOpenID"),
+                    };
+                }
+
+                if ((this.settings.oidcTokenEndpointAuthMethod === "client_secret_basic" || this.settings.oidcTokenEndpointAuthMethod === "client_secret_post") && !this.settings.oidcClientSecret) {
+                    return {
+                        success: false,
+                        msg: this.$t("oidcClientSecretRequired"),
                     };
                 }
             }

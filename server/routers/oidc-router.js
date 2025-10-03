@@ -13,14 +13,24 @@ const SESSION_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const sessionStore = new Map();
 
 let cachedIssuer;
-let cachedIssuerURL;
+let cachedIssuerDiscoveryURL;
 
+/**
+ * Create a standardized OIDC error instance.
+ * @param {string} code Custom error code for the caller.
+ * @param {string} message Human readable message.
+ * @returns {Error} Error enriched with `oidcCode`.
+ */
 function createOIDCError(code, message) {
     const error = new Error(message);
     error.oidcCode = code;
     return error;
 }
 
+/**
+ * Load OIDC configuration stored in settings.
+ * @returns {Promise<object>} Normalized OIDC configuration.
+ */
 async function getOIDCConfig() {
     const [
         enabled,
@@ -32,6 +42,8 @@ async function getOIDCConfig() {
         usernameClaim,
         autoCreateUser,
         buttonLabel,
+        discoveryURL,
+        tokenEndpointAuthMethod,
     ] = await Promise.all([
         Settings.get("oidcEnabled"),
         Settings.get("oidcIssuerURL"),
@@ -42,6 +54,8 @@ async function getOIDCConfig() {
         Settings.get("oidcUsernameClaim"),
         Settings.get("oidcAutoCreateUser"),
         Settings.get("oidcButtonLabel"),
+        Settings.get("oidcDiscoveryURL"),
+        Settings.get("oidcTokenEndpointAuthMethod"),
     ]);
 
     return {
@@ -54,9 +68,15 @@ async function getOIDCConfig() {
         usernameClaim: usernameClaim || "preferred_username",
         autoCreateUser: !!autoCreateUser,
         buttonLabel,
+        discoveryURL,
+        tokenEndpointAuthMethod: tokenEndpointAuthMethod || "auto",
     };
 }
 
+/**
+ * Remove expired OIDC auth sessions from memory.
+ * @returns {void}
+ */
 function cleanupExpiredSessions() {
     const now = Date.now();
     for (const [ state, session ] of sessionStore.entries()) {
@@ -66,6 +86,12 @@ function cleanupExpiredSessions() {
     }
 }
 
+/**
+ * Resolve the redirect URI taking reverse proxy headers into account.
+ * @param {object} req Express request.
+ * @param {?string} configuredURI Configured redirect URI.
+ * @returns {Promise<string>} Redirect URI to use.
+ */
 async function resolveRedirectURI(req, configuredURI) {
     if (configuredURI) {
         return configuredURI;
@@ -81,33 +107,115 @@ async function resolveRedirectURI(req, configuredURI) {
     return `${protocol}://${host}/auth/oidc/callback`;
 }
 
+/**
+ * Decide which token endpoint auth method to use.
+ * @param {object} issuerMetadata Metadata from the discovery document.
+ * @param {object} config Local OIDC configuration.
+ * @returns {string} Chosen token endpoint auth method.
+ */
+function inferTokenEndpointMethod(issuerMetadata, config) {
+    const supported = issuerMetadata?.token_endpoint_auth_methods_supported;
+    const hasSecret = !!config.clientSecret;
+    const configured = config.tokenEndpointAuthMethod;
+
+    if (configured && configured !== "auto") {
+        return configured;
+    }
+
+    if (Array.isArray(supported) && supported.length > 0) {
+        if (hasSecret) {
+            if (supported.includes("client_secret_basic")) {
+                return "client_secret_basic";
+            }
+            if (supported.includes("client_secret_post")) {
+                return "client_secret_post";
+            }
+            return supported[0];
+        }
+
+        if (supported.includes("none")) {
+            return "none";
+        }
+
+        return supported[0];
+    }
+
+    return hasSecret ? "client_secret_basic" : "none";
+}
+
+/**
+ * Build an openid-client instance for the configured provider.
+ * @param {object} config Normalized OIDC configuration.
+ * @returns {Promise<any>} Instantiated OIDC client instance.
+ */
 async function getClient(config) {
-    if (!config.issuer || !config.clientId) {
-        throw createOIDCError("oidcNotConfigured", "OIDC issuer or client id is not configured");
+    if (!config.clientId) {
+        throw createOIDCError("oidcNotConfigured", "OIDC client id is not configured");
+    }
+
+    const discoveryURL = config.discoveryURL || config.issuer;
+
+    if (!discoveryURL) {
+        throw createOIDCError("oidcNotConfigured", "OIDC discovery or issuer URL is not configured");
     }
 
     try {
-        if (!cachedIssuer || cachedIssuerURL !== config.issuer) {
-            cachedIssuer = await Issuer.discover(config.issuer);
-            cachedIssuerURL = config.issuer;
+        if (!cachedIssuer || cachedIssuerDiscoveryURL !== discoveryURL) {
+            cachedIssuer = await Issuer.discover(discoveryURL);
+            cachedIssuerDiscoveryURL = discoveryURL;
         }
 
-        return new cachedIssuer.Client({
+        const tokenEndpointAuthMethod = inferTokenEndpointMethod(cachedIssuer.metadata, config);
+
+        if (tokenEndpointAuthMethod && Array.isArray(cachedIssuer.metadata?.token_endpoint_auth_methods_supported)
+            && cachedIssuer.metadata.token_endpoint_auth_methods_supported.length > 0
+            && !cachedIssuer.metadata.token_endpoint_auth_methods_supported.includes(tokenEndpointAuthMethod)
+        ) {
+            throw createOIDCError("oidcUnsupportedAuthMethod", `Token endpoint auth method ${tokenEndpointAuthMethod} is not supported by the provider.`);
+        }
+
+        if ((tokenEndpointAuthMethod === "client_secret_basic" || tokenEndpointAuthMethod === "client_secret_post") && !config.clientSecret) {
+            throw createOIDCError("oidcClientSecretRequired", "Client secret required for the selected token endpoint auth method");
+        }
+
+        const clientMetadata = {
             client_id: config.clientId,
-            client_secret: config.clientSecret || undefined,
-        });
+        };
+
+        if (config.clientSecret && tokenEndpointAuthMethod !== "none") {
+            clientMetadata.client_secret = config.clientSecret;
+        }
+
+        if (tokenEndpointAuthMethod) {
+            clientMetadata.token_endpoint_auth_method = tokenEndpointAuthMethod;
+        }
+
+        return new cachedIssuer.Client(clientMetadata);
     } catch (error) {
         log.error("oidc", "OIDC discovery/client initialization failed", error);
+        if (error.oidcCode) {
+            throw error;
+        }
         throw createOIDCError("oidcDiscoveryFailed", error.message || "OIDC discovery failed");
     }
 }
 
+/**
+ * Look up an active user by username.
+ * @param {string} username Username to search.
+ * @returns {Promise<Bean|null>} Active user bean or null.
+ */
 async function findActiveUser(username) {
     return await R.findOne("user", " username = ? AND active = 1 ", [
         username,
     ]);
 }
 
+/**
+ * Create a new local user seeded from OIDC claims.
+ * @param {string} username Username for the new account.
+ * @returns {Promise<Bean>} Created user bean.
+ */
 async function createUser(username) {
     const user = R.dispense("user");
     user.username = username;
@@ -118,6 +226,11 @@ async function createUser(username) {
     return user;
 }
 
+/**
+ * Validate the optional return path provided by the client.
+ * @param {?string} value Encoded path.
+ * @returns {?string} Safe path starting with a single slash or null.
+ */
 function validateReturnTo(value) {
     if (!value) {
         return null;
@@ -259,6 +372,7 @@ router.get("/auth/oidc/info", async (_req, res) => {
             ok: true,
             enabled: config.enabled,
             buttonLabel: config.buttonLabel || null,
+            tokenEndpointAuthMethod: config.tokenEndpointAuthMethod || "auto",
         });
     } catch (error) {
         log.error("oidc", error);

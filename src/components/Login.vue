@@ -146,17 +146,20 @@ export default {
                     this.oidcInfo = {
                         enabled: !!response.data.enabled,
                         buttonLabel: response.data.buttonLabel || "",
+                        tokenEndpointAuthMethod: response.data.tokenEndpointAuthMethod || "auto",
                     };
                 } else {
                     this.oidcInfo = {
                         enabled: false,
                         buttonLabel: "",
+                        tokenEndpointAuthMethod: "auto",
                     };
                 }
             } catch (error) {
                 this.oidcInfo = {
                     enabled: false,
                     buttonLabel: "",
+                    tokenEndpointAuthMethod: "auto",
                 };
             }
         },

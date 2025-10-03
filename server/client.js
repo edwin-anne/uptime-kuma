@@ -154,6 +154,9 @@ async function sendInfo(socket, hideVersion = false) {
         dbType = Database.dbConfig.type;
     }
 
+    const oidcEnabled = await setting("oidcEnabled");
+    const oidcButtonLabel = await setting("oidcButtonLabel");
+
     socket.emit("info", {
         version,
         latestVersion,
@@ -162,6 +165,10 @@ async function sendInfo(socket, hideVersion = false) {
         primaryBaseURL: await setting("primaryBaseURL"),
         serverTimezone: await server.getTimezone(),
         serverTimezoneOffset: server.getTimezoneOffset(),
+        oidc: {
+            enabled: !!oidcEnabled,
+            buttonLabel: oidcButtonLabel || null,
+        },
     });
 }
 
